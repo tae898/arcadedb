@@ -8413,23 +8413,25 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
-   * The score provider of the PQ search ({@link #findNeighborsFromVectorApproximate(float[], int, int, int, Set, WorkGuard)}). What the walk is scored on and what
-   * re-ranks it is decided by the graph file the searcher walks, as {@code scoreProviderFor} does for the exact walk, and with jvector's own calls (the reference
-   * is {@code Grid.ConfiguredSystem.scoreProviderFor} of jvector-examples):
+   * The score provider of the PQ search ({@link #findNeighborsFromVectorApproximate(float[], int, int, int, Set, WorkGuard)}). What the walk is scored on
+   * and what re-ranks it is decided by the graph file the searcher walks, as {@code scoreProviderFor} does for the exact walk, and with jvector's own
+   * calls (the reference is {@code Grid.ConfiguredSystem.scoreProviderFor} of jvector-examples):
    * <ul>
-   *   <li>the file has {@code NVQ_VECTORS}: {@code ScoringView.rerankerFor} re-ranks on the NVQ vectors stored in the nodes, and, when it has {@code FUSED_PQ} too,
-   *   {@code ScoringView.approximateScoreFunctionFor} walks on the codes fused into the nodes; without {@code FUSED_PQ} the walk is on the resident PQ codes;</li>
+   *   <li>the file has {@code NVQ_VECTORS}: {@code ScoringView.rerankerFor} re-ranks on the NVQ vectors stored in the nodes, and, when the file has
+   *   {@code FUSED_PQ} too, {@code ScoringView.approximateScoreFunctionFor} walks on the codes fused into the nodes; without {@code FUSED_PQ} the walk
+   *   is on the resident PQ codes;</li>
    *   <li>the file has {@code FUSED_PQ} only: the fused walk, re-ranked on the vectors of the records;</li>
-   *   <li>anything else, every in-memory graph, and a search without a re-rank ({@code rerank} false, the PQ scores alone, which read nothing): the resident PQ codes
-   *   and, when re-ranking, the vectors of the records.</li>
+   *   <li>anything else, every in-memory graph, and a search without a re-rank ({@code rerank} false, the PQ scores alone, which read nothing): the
+   *   resident PQ codes and, when re-ranking, the vectors of the records.</li>
    * </ul>
    * With NVQ the distances of the answer are NVQ estimates, not the exact distances of the records' vectors.
    *
    * @param resident the score function of the heap-resident PQ codes
    * @param reranker the score function of the records' vectors when re-ranking, the PQ scores otherwise
    */
-  private DefaultSearchScoreProvider approximateScoreProviderFor(final GraphSearcher searcher, final ImmutableGraphIndex graph, final VectorFloat<?> queryVector,
-      final ScoreFunction.ApproximateScoreFunction resident, final ScoreFunction.ExactScoreFunction reranker, final boolean rerank) {
+  private DefaultSearchScoreProvider approximateScoreProviderFor(final GraphSearcher searcher, final ImmutableGraphIndex graph,
+      final VectorFloat<?> queryVector, final ScoreFunction.ApproximateScoreFunction resident, final ScoreFunction.ExactScoreFunction reranker,
+      final boolean rerank) {
     if (rerank && graph instanceof OnDiskGraphIndex diskGraph && searcher.getView() instanceof OnDiskGraphIndex.View view) {
       final boolean fused = diskGraph.getFeatureSet().contains(FeatureId.FUSED_PQ);
       if (diskGraph.getFeatureSet().contains(FeatureId.NVQ_VECTORS))

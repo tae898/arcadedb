@@ -315,7 +315,8 @@ public class LSMVectorIndexGraphFile extends PaginatedComponent {
         final Map<FeatureId, IntFunction<Feature.State>> featureStates = new HashMap<>();
 
         if (nvq != null) {
-          // An ordinal whose vector cannot be read (deleted, evicted) is encoded as the zero vector: nothing returns it, the bits filter keeps it out of the results
+          // An ordinal whose vector cannot be read (deleted, evicted) is encoded as the zero vector: nothing returns it, the bits filter keeps
+          // it out of the results
           final ArcadePageVectorValues pageValues = vectors instanceof final ArcadePageVectorValues p ? p : null;
           final VectorFloat<?> zero = JVectorUtils.createVectorFloat(dimension);
           featureStates.put(FeatureId.NVQ_VECTORS, (IntFunction<Feature.State>) ordinal -> {
@@ -387,8 +388,8 @@ public class LSMVectorIndexGraphFile extends PaginatedComponent {
   }
 
   /**
-   * The NVQ quantizer of a graph about to be written: jvector's own recipe ({@code NVQuantization.compute}, 8 bits per dimension, 2 sub-vectors) with the global
-   * mean taken over the readable ordinals only, so the placeholder of a deleted vector does not pull it. One pass over the vectors.
+   * The NVQ quantizer of a graph about to be written: jvector's own recipe ({@code NVQuantization.compute}, 8 bits per dimension, 2 sub-vectors) with
+   * the global mean taken over the readable ordinals only, so the placeholder of a deleted vector does not pull it. One pass over the vectors.
    */
   private static NVQuantization trainNvq(final RandomAccessVectorValues vectors, final int dimension) {
     final ArcadePageVectorValues pageValues = vectors instanceof final ArcadePageVectorValues p ? p : null;
