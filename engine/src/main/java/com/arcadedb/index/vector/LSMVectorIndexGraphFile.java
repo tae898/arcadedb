@@ -34,9 +34,12 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.JVectorUtils;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
@@ -260,6 +263,12 @@ public class LSMVectorIndexGraphFile extends PaginatedComponent {
       final boolean storeVectors = mainIndex != null && mainIndex.metadata.storeVectorsInGraph;
       final int dimension = vectors.dimension();
 
+      // NVQ (jvector's non-uniform vector quantization) is the opt-in re-rank store of a PRODUCT index. It takes the place of InlineVectors, which is what lets
+      // jvector's own ScoringView.rerankerFor pick it (that call prefers InlineVectors whenever the file has the feature, whatever its dimension). The records
+      // keep the user's vectors. Not written for an empty graph, and never together with storeVectorsInGraph, which fills the same slot
+      final NVQuantization nvq = mainIndex != null && mainIndex.metadata.nvq && !storeVectors
+          && mainIndex.metadata.quantizationType == VectorQuantizationType.PRODUCT && vectors.size() > 0 ? trainNvq(vectors, dimension) : null;
+
       // JVector requires InlineVectors feature, but we can use dimension=0 to store no vector data
       final int storedDimension = storeVectors ? dimension : 0;
       final VectorFloat<?> emptyVector = JVectorUtils.createVectorFloat(storedDimension);
@@ -290,28 +299,40 @@ public class LSMVectorIndexGraphFile extends PaginatedComponent {
             pq.getClusterCount());
       }
 
-      // Build writer with InlineVectors (always) and FusedPQ (when PQ available)
-      try (final OnDiskSequentialGraphIndexWriter indexWriter = hasFusedPQ ?
-          new OnDiskSequentialGraphIndexWriter.Builder(graph, writer)
-              .with(new InlineVectors(storedDimension))
-              .with(new FusedPQ(graph.maxDegree(), pq))
-              .build() :
-          new OnDiskSequentialGraphIndexWriter.Builder(graph, writer)
-              .with(new InlineVectors(storedDimension))
-              .build()) {
+      // Build writer with NVQ or InlineVectors (the vector slot jvector requires) and FusedPQ (when PQ available)
+      final OnDiskSequentialGraphIndexWriter.Builder writerBuilder = new OnDiskSequentialGraphIndexWriter.Builder(graph, writer);
+      if (nvq != null) {
+        writerBuilder.with(new NVQ(nvq));
+        LogManager.instance().log(this, Level.INFO, "Writing graph WITH NVQ vectors: %d bytes per node (float32 would be %d), %d sub-vectors",
+            nvq.compressedVectorSize(), dimension * Float.BYTES, nvq.subvectorSizesAndOffsets.length);
+      } else
+        writerBuilder.with(new InlineVectors(storedDimension));
+      if (hasFusedPQ)
+        writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
+
+      try (final OnDiskSequentialGraphIndexWriter indexWriter = writerBuilder.build()) {
         // Build feature states map
         final Map<FeatureId, IntFunction<Feature.State>> featureStates = new HashMap<>();
 
-        // InlineVectors feature
-        featureStates.put(FeatureId.INLINE_VECTORS,
-            (IntFunction<Feature.State>) ordinal -> {
-              if (storeVectors) {
-                final VectorFloat<?> vector = vectors.getVector(ordinal);
-                return new InlineVectors.State(vector != null ? vector : emptyVector);
-              } else {
-                return new InlineVectors.State(emptyVector);
-              }
-            });
+        if (nvq != null) {
+          // An ordinal whose vector cannot be read (deleted, evicted) is encoded as the zero vector: nothing returns it, the bits filter keeps it out of the results
+          final ArcadePageVectorValues pageValues = vectors instanceof final ArcadePageVectorValues p ? p : null;
+          final VectorFloat<?> zero = JVectorUtils.createVectorFloat(dimension);
+          featureStates.put(FeatureId.NVQ_VECTORS, (IntFunction<Feature.State>) ordinal -> {
+            final VectorFloat<?> vector = vectors.getVector(ordinal);
+            return new NVQ.State(nvq.encode(isUnreadable(vector, pageValues) ? zero : vector));
+          });
+        } else
+          // InlineVectors feature
+          featureStates.put(FeatureId.INLINE_VECTORS,
+              (IntFunction<Feature.State>) ordinal -> {
+                if (storeVectors) {
+                  final VectorFloat<?> vector = vectors.getVector(ordinal);
+                  return new InlineVectors.State(vector != null ? vector : emptyVector);
+                } else {
+                  return new InlineVectors.State(emptyVector);
+                }
+              });
 
         // FusedPQ feature — writes PQ-encoded vectors inline with each graph node
         if (hasFusedPQ) {
@@ -359,6 +380,32 @@ public class LSMVectorIndexGraphFile extends PaginatedComponent {
       LogManager.instance().log(this, Level.SEVERE, "Error writing graph to pages: %s", e, e.getMessage());
       throw new IndexException("Error writing graph to pages", e);
     }
+  }
+
+  private static boolean isUnreadable(final VectorFloat<?> vector, final ArcadePageVectorValues pageValues) {
+    return vector == null || (pageValues != null && pageValues.isDeletedSentinel(vector));
+  }
+
+  /**
+   * The NVQ quantizer of a graph about to be written: jvector's own recipe ({@code NVQuantization.compute}, 8 bits per dimension, 2 sub-vectors) with the global
+   * mean taken over the readable ordinals only, so the placeholder of a deleted vector does not pull it. One pass over the vectors.
+   */
+  private static NVQuantization trainNvq(final RandomAccessVectorValues vectors, final int dimension) {
+    final ArcadePageVectorValues pageValues = vectors instanceof final ArcadePageVectorValues p ? p : null;
+    final double[] sum = new double[dimension];
+    long count = 0;
+    for (int ordinal = 0; ordinal < vectors.size(); ordinal++) {
+      final VectorFloat<?> vector = vectors.getVector(ordinal);
+      if (isUnreadable(vector, pageValues))
+        continue;
+      for (int d = 0; d < dimension; d++)
+        sum[d] += vector.get(d);
+      count++;
+    }
+    final VectorFloat<?> mean = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(dimension);
+    for (int d = 0; d < dimension; d++)
+      mean.set(d, count == 0 ? 0f : (float) (sum[d] / count));
+    return NVQuantization.create(mean, dimension <= 3 ? 1 : 2);
   }
 
   /**

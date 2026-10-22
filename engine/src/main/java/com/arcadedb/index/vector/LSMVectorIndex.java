@@ -4434,7 +4434,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           // When storeVectorsInGraph is enabled, reload the graph as OnDiskGraphIndex so the
           // current session benefits from inline vector storage immediately. This is safe because
           // the transaction has been committed above, so all graph pages are flushed and visible.
-          if (metadata.storeVectorsInGraph) {
+          if (metadata.storeVectorsInGraph || metadata.nvq) {
             try {
               final OnDiskGraphIndex diskGraph = gf.loadGraph();
               if (diskGraph != null) {
@@ -8412,6 +8412,35 @@ public class LSMVectorIndex implements Index, IndexInternal {
     return new DefaultSearchScoreProvider(exact, exact);
   }
 
+  /**
+   * The score provider of the PQ search ({@link #findNeighborsFromVectorApproximate(float[], int, int, int, Set, WorkGuard)}). What the walk is scored on and what
+   * re-ranks it is decided by the graph file the searcher walks, as {@code scoreProviderFor} does for the exact walk, and with jvector's own calls (the reference
+   * is {@code Grid.ConfiguredSystem.scoreProviderFor} of jvector-examples):
+   * <ul>
+   *   <li>the file has {@code NVQ_VECTORS}: {@code ScoringView.rerankerFor} re-ranks on the NVQ vectors stored in the nodes, and, when it has {@code FUSED_PQ} too,
+   *   {@code ScoringView.approximateScoreFunctionFor} walks on the codes fused into the nodes; without {@code FUSED_PQ} the walk is on the resident PQ codes;</li>
+   *   <li>the file has {@code FUSED_PQ} only: the fused walk, re-ranked on the vectors of the records;</li>
+   *   <li>anything else, every in-memory graph, and a search without a re-rank ({@code rerank} false, the PQ scores alone, which read nothing): the resident PQ codes
+   *   and, when re-ranking, the vectors of the records.</li>
+   * </ul>
+   * With NVQ the distances of the answer are NVQ estimates, not the exact distances of the records' vectors.
+   *
+   * @param resident the score function of the heap-resident PQ codes
+   * @param reranker the score function of the records' vectors when re-ranking, the PQ scores otherwise
+   */
+  private DefaultSearchScoreProvider approximateScoreProviderFor(final GraphSearcher searcher, final ImmutableGraphIndex graph, final VectorFloat<?> queryVector,
+      final ScoreFunction.ApproximateScoreFunction resident, final ScoreFunction.ExactScoreFunction reranker, final boolean rerank) {
+    if (rerank && graph instanceof OnDiskGraphIndex diskGraph && searcher.getView() instanceof OnDiskGraphIndex.View view) {
+      final boolean fused = diskGraph.getFeatureSet().contains(FeatureId.FUSED_PQ);
+      if (diskGraph.getFeatureSet().contains(FeatureId.NVQ_VECTORS))
+        return new DefaultSearchScoreProvider(fused ? view.approximateScoreFunctionFor(queryVector, metadata.similarityFunction) : resident,
+            view.rerankerFor(queryVector, metadata.similarityFunction));
+      if (fused)
+        return scoreProviderFor(searcher, graph, queryVector, reranker);
+    }
+    return new DefaultSearchScoreProvider(resident, reranker);
+  }
+
   private List<Pair<RID, Float>> searchNeighbors(final float[] queryVector, int k, final int efSearch,
       final Set<RID> allowedRIDs, final WorkGuard guard) {
     // Track search metrics
@@ -9833,9 +9862,6 @@ public class LSMVectorIndex implements Index, IndexInternal {
               liveOnlyScoreFunction(queryVectorFloat, exactVectors) :
               ordinal -> scoreFunction.similarityTo(ordinal);
 
-          // Wrap in a DefaultSearchScoreProvider (concrete implementation)
-          final DefaultSearchScoreProvider ssp = new DefaultSearchScoreProvider(scoreFunction, reranker);
-
           // The beam: JVector keeps rerankK candidates and returns the best k of them after the reranker has scored them
           final long wanted = Math.max((long) k * rerankOversample, (long) efSearch);
           final int rerankK = (int) Math.min(Math.max(wanted, k), Math.max(k, pinnedGraph.size()));
@@ -9882,6 +9908,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final ImmutableGraphIndex pooledGraph = pinnedGraph;
           final GraphSearcher searcher = pool.borrow(pooledGraph, poolEpoch);
           try {
+            // Built from the searcher's own view: a graph file with fused codes or NVQ vectors is walked and re-ranked through jvector's own score functions
+            final DefaultSearchScoreProvider ssp = approximateScoreProviderFor(searcher, pooledGraph, queryVectorFloat, scoreFunction, reranker, rerank);
             searchResult = rerank || efSearch > k ?
                 searcher.search(ssp, k, rerankK, 0.0f, 0.0f, bitsFilter) :
                 searcher.search(ssp, k, bitsFilter);
@@ -11284,6 +11312,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     json.put("pqCenterGlobally", metadata.pqCenterGlobally);
     json.put("pqTrainingLimit", metadata.pqTrainingLimit);
     json.put("fusedPQ", metadata.fusedPQ);
+    json.put("nvq", metadata.nvq);
     json.put("rerankOversample", metadata.rerankOversample);
 
     return json;

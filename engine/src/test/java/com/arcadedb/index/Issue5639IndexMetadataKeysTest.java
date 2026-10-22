@@ -112,6 +112,7 @@ class Issue5639IndexMetadataKeysTest extends TestHelper {
           "pqClusters": 128,
           "pqCenterGlobally": false,
           "fusedPQ": true,
+          "nvq": true,
           "rerankOversample": 7
         }""");
 
@@ -130,6 +131,7 @@ class Issue5639IndexMetadataKeysTest extends TestHelper {
     assertThat(metadata.pqClusters).isEqualTo(128);
     assertThat(metadata.pqCenterGlobally).isFalse();
     assertThat(metadata.fusedPQ).isTrue();
+    assertThat(metadata.nvq).isTrue();
     assertThat(metadata.rerankOversample).isEqualTo(7);
   }
 
@@ -322,6 +324,7 @@ class Issue5639IndexMetadataKeysTest extends TestHelper {
         .withPQCenterGlobally(false)
         .withPQTrainingLimit(4096)
         .withFusedPQ(true)
+        .withNvq(true)
         .withRerankOversample(7);
 
     final LSMVectorIndexMetadata metadata = builder.getVectorMetadata();
@@ -340,6 +343,7 @@ class Issue5639IndexMetadataKeysTest extends TestHelper {
     assertThat(metadata.pqCenterGlobally).isFalse();
     assertThat(metadata.pqTrainingLimit).isEqualTo(4096);
     assertThat(metadata.fusedPQ).isTrue();
+    assertThat(metadata.nvq).isTrue();
     assertThat(metadata.rerankOversample).isEqualTo(7);
 
     // The string and enum overloads of the two paired setters must agree.

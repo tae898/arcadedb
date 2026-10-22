@@ -257,6 +257,15 @@ public class BucketLSMVectorIndexBuilder extends BucketIndexBuilder {
   }
 
   /**
+   * Stores jvector's NVQ vectors (8-bit non-uniform quantization) in every node of the graph file and re-ranks on them instead of on the vectors of
+   * the records, PRODUCT only. The records keep the vectors, so the file grows by the NVQ copy. Off by default; not combinable with storeVectorsInGraph.
+   */
+  public BucketLSMVectorIndexBuilder withNvq(final boolean nvq) {
+    vectorMetadata().nvq = nvq;
+    return this;
+  }
+
+  /**
    * Sets the candidates per requested neighbour that a search of a PRODUCT index re-ranks on the stored vectors when the
    * query does not say (issue #10514); 0 returns the PQ scores alone, without reading a stored vector.
    */

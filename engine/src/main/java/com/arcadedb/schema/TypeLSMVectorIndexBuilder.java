@@ -346,6 +346,15 @@ public class TypeLSMVectorIndexBuilder extends TypeIndexBuilder {
   }
 
   /**
+   * Stores jvector's NVQ vectors (8-bit non-uniform quantization) in every node of the graph file and re-ranks on them instead of on the vectors of
+   * the records, PRODUCT only. The records keep the vectors, so the file grows by the NVQ copy. Off by default; not combinable with storeVectorsInGraph.
+   */
+  public TypeLSMVectorIndexBuilder withNvq(final boolean nvq) {
+    vectorMetadata().nvq = nvq;
+    return this;
+  }
+
+  /**
    * Sets the candidates per requested neighbour that a search of a PRODUCT index re-ranks on the stored vectors when the
    * query does not say (issue #10514). The default is {@code LSMVectorIndex.DEFAULT_APPROXIMATE_RERANK_OVERSAMPLE};
    * 0 returns the PQ scores alone, without reading a stored vector.
@@ -363,6 +372,14 @@ public class TypeLSMVectorIndexBuilder extends TypeIndexBuilder {
       LogManager.instance().log(this, Level.WARNING,
           "Index on '%s': fusedPQ is ignored because pqClusters is %d; FusedPQ needs 256 clusters, so the graph file is written without it",
           vectorMetadata.typeName, vectorMetadata.pqClusters);
+    // NVQ takes the slot of the inline vectors in the graph file, so the two cannot both be asked for
+    if (vectorMetadata.nvq && vectorMetadata.storeVectorsInGraph)
+      throw new IllegalArgumentException("Index on '" + vectorMetadata.typeName
+          + "': nvq and storeVectorsInGraph both fill the one vector slot of the graph file; choose one");
+    if (vectorMetadata.nvq && vectorMetadata.quantizationType != VectorQuantizationType.PRODUCT)
+      LogManager.instance().log(this, Level.WARNING,
+          "Index on '%s': nvq is ignored because the quantization is %s; NVQ re-ranks a PRODUCT index only", vectorMetadata.typeName,
+          vectorMetadata.quantizationType);
     return super.create();
   }
 
